@@ -1,0 +1,20 @@
+name: post-build
+on:
+  workflow_run:
+    workflows: ["build"]
+    types: [completed]
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          allow-unsafe-pr-checkout: true
+      - run: bash ./ci/build.sh
